@@ -2,7 +2,6 @@ package com.example.data.repository
 
 import android.content.Context
 import android.util.Log
-import com.example.R
 import com.example.data.local.entity.AccountEntity
 import com.example.data.local.entity.BudgetEntity
 import com.example.data.local.entity.CategoryEntity
@@ -64,11 +63,41 @@ data class CloudDataBundle(
 )
 
 class FirestoreSyncRepository(private val db: FirebaseFirestore) {
-    constructor(context: Context) : this(
-        FirebaseFirestore.getInstance(
-            context.applicationContext.getString(R.string.firestore_database_id)
-        )
-    )
+    constructor(context: Context) : this(getFirestoreInstance(context))
+    constructor() : this(getFirestoreInstance(null))
+
+    companion object {
+        private const val TAG = "FirestoreSync"
+
+        /**
+         * Resolves the Firestore instance dynamically.
+         * If a custom database ID resource exists (e.g. from firebase_applet_config.xml), it uses it.
+         * Otherwise, it seamlessly falls back to the default FirebaseFirestore instance.
+         * This avoids compile-time unresolved reference errors in local Android Studio environments.
+         */
+        fun getFirestoreInstance(context: Context? = null): FirebaseFirestore {
+            return try {
+                if (context != null) {
+                    val appContext = context.applicationContext
+                    val resId = appContext.resources.getIdentifier(
+                        "firestore_database_id",
+                        "string",
+                        appContext.packageName
+                    )
+                    if (resId != 0) {
+                        val dbId = appContext.getString(resId)
+                        if (dbId.isNotBlank() && dbId != "(default)") {
+                            return FirebaseFirestore.getInstance(dbId)
+                        }
+                    }
+                }
+                FirebaseFirestore.getInstance()
+            } catch (e: Exception) {
+                Log.w(TAG, "Fallback to default FirebaseFirestore instance: ${e.message}")
+                FirebaseFirestore.getInstance()
+            }
+        }
+    }
 
     private fun requireUserId(): String {
         return Firebase.auth.currentUser?.uid
