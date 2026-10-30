@@ -156,6 +156,12 @@ class FinanceRepository(private val database: AppDatabase) {
         savingsGoals: List<SavingsGoalEntity>
     ): String {
         val root = JSONObject()
+        root.put("app", "MoneyMate")
+        root.put("version", 1)
+        root.put("exportedAt", System.currentTimeMillis())
+        root.put("formattedDate", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date()))
+
+        // Transactions
         val txArray = JSONArray()
         transactions.forEach { tx ->
             val obj = JSONObject()
@@ -166,10 +172,13 @@ class FinanceRepository(private val database: AppDatabase) {
             obj.put("toAccountName", tx.toAccountName ?: "")
             obj.put("dateMillis", tx.dateMillis)
             obj.put("description", tx.description)
+            obj.put("isRecurring", tx.isRecurring)
+            obj.put("recurringFrequency", tx.recurringFrequency ?: "")
             txArray.put(obj)
         }
         root.put("transactions", txArray)
 
+        // Categories
         val catArray = JSONArray()
         categories.forEach { cat ->
             val obj = JSONObject()
@@ -177,10 +186,12 @@ class FinanceRepository(private val database: AppDatabase) {
             obj.put("type", cat.type)
             obj.put("iconName", cat.iconName)
             obj.put("colorHex", cat.colorHex)
+            obj.put("isDefault", cat.isDefault)
             catArray.put(obj)
         }
         root.put("categories", catArray)
 
+        // Accounts
         val accArray = JSONArray()
         accounts.forEach { acc ->
             val obj = JSONObject()
@@ -194,6 +205,176 @@ class FinanceRepository(private val database: AppDatabase) {
         }
         root.put("accounts", accArray)
 
+        // Budgets
+        val budgetArray = JSONArray()
+        budgets.forEach { b ->
+            val obj = JSONObject()
+            obj.put("categoryName", b.categoryName)
+            obj.put("monthlyLimit", b.monthlyLimit)
+            obj.put("monthYear", b.monthYear)
+            budgetArray.put(obj)
+        }
+        root.put("budgets", budgetArray)
+
+        // Savings Goals
+        val goalArray = JSONArray()
+        savingsGoals.forEach { g ->
+            val obj = JSONObject()
+            obj.put("title", g.title)
+            obj.put("targetAmount", g.targetAmount)
+            obj.put("currentSaved", g.currentSaved)
+            obj.put("targetDateMillis", g.targetDateMillis)
+            obj.put("colorHex", g.colorHex)
+            obj.put("iconName", g.iconName)
+            obj.put("notes", g.notes)
+            goalArray.put(obj)
+        }
+        root.put("savingsGoals", goalArray)
+
         return root.toString(2)
     }
+
+    suspend fun restoreFromJson(jsonString: String, clearExisting: Boolean = true): RestoreResult {
+        return try {
+            val root = JSONObject(jsonString)
+
+            if (clearExisting) {
+                transactionDao.deleteAllTransactions()
+                budgetDao.deleteAllBudgets()
+                savingsGoalDao.deleteAllSavingsGoals()
+                categoryDao.deleteAllCategories()
+                accountDao.deleteAllAccounts()
+            }
+
+            // 1. Restore Accounts
+            val accArray = root.optJSONArray("accounts") ?: JSONArray()
+            val accountIdMap = mutableMapOf<String, Long>()
+            for (i in 0 until accArray.length()) {
+                val obj = accArray.getJSONObject(i)
+                val name = obj.optString("name", "Account")
+                val entity = AccountEntity(
+                    name = name,
+                    type = obj.optString("type", "CASH"),
+                    initialBalance = obj.optDouble("initialBalance", 0.0),
+                    accountNumber = obj.optString("accountNumber").takeIf { it.isNotEmpty() },
+                    colorHex = obj.optString("colorHex", "#1E6FD9"),
+                    iconName = obj.optString("iconName", "AccountBalance")
+                )
+                val id = accountDao.insertAccount(entity)
+                accountIdMap[name.lowercase()] = id
+            }
+
+            // 2. Restore Categories
+            val catArray = root.optJSONArray("categories") ?: JSONArray()
+            val categoryIdMap = mutableMapOf<String, Long>()
+            for (i in 0 until catArray.length()) {
+                val obj = catArray.getJSONObject(i)
+                val name = obj.optString("name", "Other")
+                val entity = CategoryEntity(
+                    name = name,
+                    type = obj.optString("type", "EXPENSE"),
+                    iconName = obj.optString("iconName", "MoreHoriz"),
+                    colorHex = obj.optString("colorHex", "#3B82F6"),
+                    isDefault = obj.optBoolean("isDefault", false)
+                )
+                val id = categoryDao.insertCategory(entity)
+                categoryIdMap[name.lowercase()] = id
+            }
+
+            // Fallback default category & account if empty
+            if (accountDao.getAccountCount() == 0) {
+                AppDatabase.populateInitialData(database)
+            }
+
+            // 3. Restore Transactions
+            val txArray = root.optJSONArray("transactions") ?: JSONArray()
+            for (i in 0 until txArray.length()) {
+                val obj = txArray.getJSONObject(i)
+                val catName = obj.optString("categoryName", "Other")
+                val accName = obj.optString("accountName", "Cash Wallet")
+                val toAccName = obj.optString("toAccountName").takeIf { it.isNotEmpty() }
+
+                val catId = categoryIdMap[catName.lowercase()] ?: 1L
+                val accId = accountIdMap[accName.lowercase()] ?: 1L
+                val toAccId = toAccName?.let { accountIdMap[it.lowercase()] }
+
+                val entity = TransactionEntity(
+                    type = obj.optString("type", "EXPENSE"),
+                    amount = obj.optDouble("amount", 0.0),
+                    categoryId = catId,
+                    categoryName = catName,
+                    accountId = accId,
+                    accountName = accName,
+                    toAccountId = toAccId,
+                    toAccountName = toAccName,
+                    dateMillis = obj.optLong("dateMillis", System.currentTimeMillis()),
+                    description = obj.optString("description", ""),
+                    isRecurring = obj.optBoolean("isRecurring", false),
+                    recurringFrequency = obj.optString("recurringFrequency").takeIf { it.isNotEmpty() }
+                )
+                transactionDao.insertTransaction(entity)
+            }
+
+            // 4. Restore Budgets
+            val budgetArray = root.optJSONArray("budgets") ?: JSONArray()
+            for (i in 0 until budgetArray.length()) {
+                val obj = budgetArray.getJSONObject(i)
+                val catName = obj.optString("categoryName", "Food")
+                val catId = categoryIdMap[catName.lowercase()] ?: 1L
+                val entity = BudgetEntity(
+                    categoryId = catId,
+                    categoryName = catName,
+                    monthlyLimit = obj.optDouble("monthlyLimit", 5000.0),
+                    monthYear = obj.optString("monthYear", "2026-10")
+                )
+                budgetDao.insertBudget(entity)
+            }
+
+            // 5. Restore Savings Goals
+            val goalArray = root.optJSONArray("savingsGoals") ?: JSONArray()
+            for (i in 0 until goalArray.length()) {
+                val obj = goalArray.getJSONObject(i)
+                val entity = SavingsGoalEntity(
+                    title = obj.optString("title", "Goal"),
+                    targetAmount = obj.optDouble("targetAmount", 10000.0),
+                    currentSaved = obj.optDouble("currentSaved", 0.0),
+                    targetDateMillis = obj.optLong("targetDateMillis", System.currentTimeMillis() + 86400000L * 30),
+                    colorHex = obj.optString("colorHex", "#10B981"),
+                    iconName = obj.optString("iconName", "Savings"),
+                    notes = obj.optString("notes", "")
+                )
+                savingsGoalDao.insertSavingsGoal(entity)
+            }
+
+            RestoreResult(
+                success = true,
+                transactionsCount = txArray.length(),
+                accountsCount = accArray.length(),
+                categoriesCount = catArray.length(),
+                budgetsCount = budgetArray.length(),
+                goalsCount = goalArray.length()
+            )
+        } catch (e: Exception) {
+            RestoreResult(
+                success = false,
+                transactionsCount = 0,
+                accountsCount = 0,
+                categoriesCount = 0,
+                budgetsCount = 0,
+                goalsCount = 0,
+                errorMessage = e.localizedMessage ?: "Invalid backup file format"
+            )
+        }
+    }
 }
+
+data class RestoreResult(
+    val success: Boolean,
+    val transactionsCount: Int,
+    val accountsCount: Int,
+    val categoriesCount: Int,
+    val budgetsCount: Int,
+    val goalsCount: Int,
+    val errorMessage: String? = null
+)
+

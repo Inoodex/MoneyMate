@@ -66,6 +66,9 @@ interface CategoryDao {
     @Delete
     suspend fun deleteCategory(category: CategoryEntity)
 
+    @Query("DELETE FROM categories")
+    suspend fun deleteAllCategories()
+
     @Query("SELECT COUNT(*) FROM categories")
     suspend fun getCategoryCount(): Int
 }
@@ -90,6 +93,9 @@ interface AccountDao {
     @Delete
     suspend fun deleteAccount(account: AccountEntity)
 
+    @Query("DELETE FROM accounts")
+    suspend fun deleteAllAccounts()
+
     @Query("SELECT COUNT(*) FROM accounts")
     suspend fun getAccountCount(): Int
 }
@@ -113,6 +119,9 @@ interface BudgetDao {
 
     @Query("DELETE FROM budgets WHERE id = :id")
     suspend fun deleteBudgetById(id: Long)
+
+    @Query("DELETE FROM budgets")
+    suspend fun deleteAllBudgets()
 }
 
 @Dao
@@ -131,4 +140,7 @@ interface SavingsGoalDao {
 
     @Query("DELETE FROM savings_goals WHERE id = :id")
     suspend fun deleteSavingsGoalById(id: Long)
+
+    @Query("DELETE FROM savings_goals")
+    suspend fun deleteAllSavingsGoals()
 }

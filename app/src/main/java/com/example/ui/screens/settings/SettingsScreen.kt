@@ -47,11 +47,18 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.CloudUpload
+import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -68,9 +75,15 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.local.entity.AccountEntity
 import com.example.data.preferences.AvailableCurrencies
 import com.example.data.preferences.ThemeMode
+import com.example.data.repository.RestoreResult
 import com.example.ui.components.FormatUtils
 import com.example.ui.theme.ExpenseRed
+import com.example.util.BackupHelper
 import com.example.viewmodel.FinanceViewModel
+import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @Composable
 fun SettingsScreen(
@@ -78,8 +91,10 @@ fun SettingsScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
     val userSettings by viewModel.userSettings.collectAsStateWithLifecycle()
     val allAccounts by viewModel.allAccounts.collectAsStateWithLifecycle()
+    val allTransactions by viewModel.allTransactions.collectAsStateWithLifecycle()
 
     var showCurrencyDialog by remember { mutableStateOf(false) }
     var showThemeDialog by remember { mutableStateOf(false) }
@@ -87,6 +102,39 @@ fun SettingsScreen(
     var showPinDialog by remember { mutableStateOf(false) }
     var showAddAccountDialog by remember { mutableStateOf(false) }
     var showResetDialog by remember { mutableStateOf(false) }
+
+    // Backup & Restore states
+    var pendingRestoreContent by remember { mutableStateOf<String?>(null) }
+    var restoreResult by remember { mutableStateOf<RestoreResult?>(null) }
+
+    // Storage Access Framework Launcher for Save Document (Google Drive / Files)
+    val saveFileLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        if (uri != null) {
+            val json = viewModel.getJsonBackup()
+            val success = BackupHelper.writeToUri(context, uri, json)
+            if (success) {
+                Toast.makeText(context, "Backup saved to Google Drive / Files successfully!", Toast.LENGTH_LONG).show()
+            } else {
+                Toast.makeText(context, "Failed to save backup file", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    // Storage Access Framework Launcher for Open Document (Restore from Google Drive / Files)
+    val openFileLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            val jsonContent = BackupHelper.readFromUri(context, uri)
+            if (!jsonContent.isNullOrBlank()) {
+                pendingRestoreContent = jsonContent
+            } else {
+                Toast.makeText(context, "Unable to read backup file", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
 
     LazyColumn(
         modifier = modifier
@@ -367,10 +415,10 @@ fun SettingsScreen(
             }
         }
 
-        // Backup & Reset Section
+        // Cloud & Email Backup Section
         item {
             Text(
-                text = "Data & Storage",
+                text = "Cloud & Email Backup",
                 style = MaterialTheme.typography.titleSmall.copy(
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.primary
@@ -386,22 +434,56 @@ fun SettingsScreen(
                 elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
             ) {
                 Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                    // Send to Gmail / Email
                     SettingsRow(
-                        icon = Icons.Default.Backup,
-                        title = "Local JSON Backup",
-                        subtitle = "Copy or share full database backup",
+                        icon = Icons.Default.Email,
+                        title = "Backup to Gmail / Email",
+                        subtitle = "Send data file to ${userSettings.userEmail.ifBlank { "your email" }}",
                         onClick = {
                             val json = viewModel.getJsonBackup()
-                            val sendIntent = Intent().apply {
-                                action = Intent.ACTION_SEND
-                                putExtra(Intent.EXTRA_TEXT, json)
-                                putExtra(Intent.EXTRA_SUBJECT, "MoneyMate_Backup.json")
-                                type = "application/json"
-                            }
-                            context.startActivity(Intent.createChooser(sendIntent, "Share MoneyMate Backup"))
+                            BackupHelper.sendEmailBackup(
+                                context = context,
+                                recipientEmail = userSettings.userEmail,
+                                jsonContent = json,
+                                txCount = allTransactions.size,
+                                accountsCount = allAccounts.size
+                            )
                         }
                     )
 
+                    // Save to Google Drive / Files
+                    SettingsRow(
+                        icon = Icons.Default.CloudUpload,
+                        title = "Save to Google Drive / Files",
+                        subtitle = "Choose Google Drive or device folder",
+                        onClick = {
+                            val timeStr = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+                            saveFileLauncher.launch("MoneyMate_Backup_$timeStr.json")
+                        }
+                    )
+
+                    // Restore from Google Drive / Files
+                    SettingsRow(
+                        icon = Icons.Default.CloudDownload,
+                        title = "Restore from Google Drive / File",
+                        subtitle = "Select a .json backup file to import",
+                        onClick = {
+                            openFileLauncher.launch(arrayOf("application/json", "text/*", "*/*"))
+                        }
+                    )
+
+                    // Share Backup via other apps
+                    SettingsRow(
+                        icon = Icons.Default.Share,
+                        title = "Share Backup File",
+                        subtitle = "Send via WhatsApp, Telegram, Drive, etc.",
+                        onClick = {
+                            val json = viewModel.getJsonBackup()
+                            BackupHelper.shareBackupFile(context, json)
+                        }
+                    )
+
+                    // Reset All Data
                     SettingsRow(
                         icon = Icons.Default.DeleteForever,
                         title = "Reset All Data",
@@ -726,6 +808,64 @@ fun SettingsScreen(
             dismissButton = {
                 TextButton(onClick = { showResetDialog = false }) {
                     Text("Cancel")
+                }
+            }
+        )
+    }
+
+    // Pending Restore Confirmation Dialog
+    pendingRestoreContent?.let { content ->
+        AlertDialog(
+            onDismissRequest = { pendingRestoreContent = null },
+            title = { Text("Confirm Data Restore") },
+            text = {
+                Text("This will restore transactions, accounts, categories, budgets, and savings goals from your selected backup file. Existing records will be cleanly replaced with the backup.\n\nDo you want to proceed?")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        coroutineScope.launch {
+                            val result = viewModel.restoreFromJson(content, clearExisting = true)
+                            restoreResult = result
+                            pendingRestoreContent = null
+                        }
+                    }
+                ) {
+                    Text("Proceed & Restore")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingRestoreContent = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    // Restore Result Dialog
+    restoreResult?.let { result ->
+        AlertDialog(
+            onDismissRequest = { restoreResult = null },
+            title = {
+                Text(if (result.success) "Restore Successful!" else "Restore Failed")
+            },
+            text = {
+                if (result.success) {
+                    Text(
+                        "Your MoneyMate data was restored successfully:\n\n" +
+                        "• Transactions: ${result.transactionsCount}\n" +
+                        "• Accounts: ${result.accountsCount}\n" +
+                        "• Categories: ${result.categoriesCount}\n" +
+                        "• Budgets: ${result.budgetsCount}\n" +
+                        "• Savings Goals: ${result.goalsCount}"
+                    )
+                } else {
+                    Text("Could not restore data from the file: ${result.errorMessage}")
+                }
+            },
+            confirmButton = {
+                Button(onClick = { restoreResult = null }) {
+                    Text("OK")
                 }
             }
         )

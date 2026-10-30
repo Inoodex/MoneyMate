@@ -628,4 +628,8 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
             allSavingsGoals.value
         )
     }
+
+    suspend fun restoreFromJson(jsonString: String, clearExisting: Boolean = true): com.example.data.repository.RestoreResult {
+        return repository.restoreFromJson(jsonString, clearExisting)
+    }
 }

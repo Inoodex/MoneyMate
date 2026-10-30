@@ -38,4 +38,23 @@ class ExampleRobolectricTest {
     assertEquals(92500.0, balance, 0.001)
     assertEquals(50000.0, savings, 0.001)
   }
+
+  @Test
+  fun `test backup json contains app metadata and entities`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val database = com.example.data.local.AppDatabase.getDatabase(context, kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO))
+    val repo = com.example.data.repository.FinanceRepository(database)
+
+    val json = repo.generateJsonBackup(
+      transactions = emptyList(),
+      categories = emptyList(),
+      accounts = emptyList(),
+      budgets = emptyList(),
+      savingsGoals = emptyList()
+    )
+
+    assertTrue(json.contains("MoneyMate"))
+    assertTrue(json.contains("\"transactions\""))
+    assertTrue(json.contains("\"accounts\""))
+  }
 }
