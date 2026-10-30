@@ -1,0 +1,6 @@
+{
+  "name": "MoneyMate",
+  "description": "Personal Income and Expense Tracker for managing finances, budgets, savings goals, accounts, and reports.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
