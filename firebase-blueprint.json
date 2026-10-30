@@ -1,0 +1,113 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile and sync preferences",
+      "type": "object",
+      "properties": {
+        "displayName": { "type": "string" },
+        "email": { "type": "string" },
+        "lastSyncTime": { "type": "number" },
+        "autoSyncEnabled": { "type": "boolean" },
+        "currencyCode": { "type": "string" }
+      },
+      "required": ["email"]
+    },
+    "Transaction": {
+      "title": "Transaction",
+      "description": "Financial transaction record",
+      "type": "object",
+      "properties": {
+        "type": { "type": "string", "enum": ["INCOME", "EXPENSE", "TRANSFER"] },
+        "amount": { "type": "number" },
+        "categoryName": { "type": "string" },
+        "accountName": { "type": "string" },
+        "toAccountName": { "type": "string" },
+        "dateMillis": { "type": "number" },
+        "description": { "type": "string" },
+        "isRecurring": { "type": "boolean" },
+        "recurringFrequency": { "type": "string" }
+      },
+      "required": ["type", "amount", "accountName", "dateMillis"]
+    },
+    "Account": {
+      "title": "Account",
+      "description": "Payment and storage account",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "type": { "type": "string" },
+        "initialBalance": { "type": "number" },
+        "accountNumber": { "type": "string" },
+        "colorHex": { "type": "string" },
+        "iconName": { "type": "string" }
+      },
+      "required": ["name", "type"]
+    },
+    "Category": {
+      "title": "Category",
+      "description": "Transaction category definition",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "type": { "type": "string", "enum": ["INCOME", "EXPENSE"] },
+        "iconName": { "type": "string" },
+        "colorHex": { "type": "string" },
+        "isDefault": { "type": "boolean" }
+      },
+      "required": ["name", "type"]
+    },
+    "Budget": {
+      "title": "Budget",
+      "description": "Monthly spending budget limit",
+      "type": "object",
+      "properties": {
+        "categoryName": { "type": "string" },
+        "monthlyLimit": { "type": "number" },
+        "monthYear": { "type": "string" }
+      },
+      "required": ["categoryName", "monthlyLimit", "monthYear"]
+    },
+    "SavingsGoal": {
+      "title": "SavingsGoal",
+      "description": "Target financial savings goal",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "targetAmount": { "type": "number" },
+        "currentSaved": { "type": "number" },
+        "targetDateMillis": { "type": "number" },
+        "colorHex": { "type": "string" },
+        "iconName": { "type": "string" },
+        "notes": { "type": "string" }
+      },
+      "required": ["title", "targetAmount", "targetDateMillis"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "Root user document"
+    },
+    "/users/{userId}/transactions/{txId}": {
+      "schema": { "$ref": "#/entities/Transaction" },
+      "description": "User's financial transactions"
+    },
+    "/users/{userId}/accounts/{accountId}": {
+      "schema": { "$ref": "#/entities/Account" },
+      "description": "User's financial accounts"
+    },
+    "/users/{userId}/categories/{categoryId}": {
+      "schema": { "$ref": "#/entities/Category" },
+      "description": "User's spending/income categories"
+    },
+    "/users/{userId}/budgets/{budgetId}": {
+      "schema": { "$ref": "#/entities/Budget" },
+      "description": "User's monthly category budgets"
+    },
+    "/users/{userId}/savingsGoals/{goalId}": {
+      "schema": { "$ref": "#/entities/SavingsGoal" },
+      "description": "User's personal savings goals"
+    }
+  }
+}

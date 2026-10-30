@@ -12,6 +12,9 @@ val Blue400 = Color(0xFF3B82F6)
 val Blue100 = Color(0xFFDBEAFE)
 val Blue50 = Color(0xFFEFF6FF)
 
+val PrimaryBlue = Blue600
+val PrimaryDarkBlue = Navy800
+
 val IncomeGreen = Color(0xFF059669)
 val IncomeGreenLight = Color(0xFFD1FAE5)
 val ExpenseRed = Color(0xFFDC2626)

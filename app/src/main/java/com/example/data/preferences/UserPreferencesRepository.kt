@@ -5,6 +5,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
@@ -44,8 +45,10 @@ data class UserSettings(
     val isBiometricEnabled: Boolean = false,
     val dailyReminderEnabled: Boolean = true,
     val budgetAlertsEnabled: Boolean = true,
-    val userName: String = "Mahmud Hasan",
-    val userEmail: String = "mahmud@example.com"
+    val userName: String = "Set Your Name",
+    val userEmail: String = "set Your email.",
+    val isAutoSyncEnabled: Boolean = true,
+    val lastSyncTimestamp: Long = 0L
 )
 
 class UserPreferencesRepository(private val context: Context) {
@@ -60,6 +63,8 @@ class UserPreferencesRepository(private val context: Context) {
         val BUDGET_ALERTS_ENABLED = booleanPreferencesKey("budget_alerts_enabled")
         val USER_NAME = stringPreferencesKey("user_name")
         val USER_EMAIL = stringPreferencesKey("user_email")
+        val IS_AUTO_SYNC_ENABLED = booleanPreferencesKey("is_auto_sync_enabled")
+        val LAST_SYNC_TIMESTAMP = longPreferencesKey("last_sync_timestamp")
     }
 
     val userSettingsFlow: Flow<UserSettings> = context.dataStore.data.map { preferences ->
@@ -72,8 +77,10 @@ class UserPreferencesRepository(private val context: Context) {
         val isBiometricEnabled = preferences[PreferencesKeys.IS_BIOMETRIC_ENABLED] ?: false
         val dailyReminderEnabled = preferences[PreferencesKeys.DAILY_REMINDER_ENABLED] ?: true
         val budgetAlertsEnabled = preferences[PreferencesKeys.BUDGET_ALERTS_ENABLED] ?: true
-        val userName = preferences[PreferencesKeys.USER_NAME] ?: "Mahmud Hasan"
-        val userEmail = preferences[PreferencesKeys.USER_EMAIL] ?: "mahmud@example.com"
+        val userName = preferences[PreferencesKeys.USER_NAME] ?: "Set Your Name"
+        val userEmail = preferences[PreferencesKeys.USER_EMAIL] ?: "set Your email."
+        val isAutoSyncEnabled = preferences[PreferencesKeys.IS_AUTO_SYNC_ENABLED] ?: true
+        val lastSyncTimestamp = preferences[PreferencesKeys.LAST_SYNC_TIMESTAMP] ?: 0L
 
         UserSettings(
             currencyCode = currencyCode,
@@ -85,7 +92,9 @@ class UserPreferencesRepository(private val context: Context) {
             dailyReminderEnabled = dailyReminderEnabled,
             budgetAlertsEnabled = budgetAlertsEnabled,
             userName = userName,
-            userEmail = userEmail
+            userEmail = userEmail,
+            isAutoSyncEnabled = isAutoSyncEnabled,
+            lastSyncTimestamp = lastSyncTimestamp
         )
     }
 
@@ -131,6 +140,18 @@ class UserPreferencesRepository(private val context: Context) {
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.USER_NAME] = name
             preferences[PreferencesKeys.USER_EMAIL] = email
+        }
+    }
+
+    suspend fun setAutoSync(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[PreferencesKeys.IS_AUTO_SYNC_ENABLED] = enabled
+        }
+    }
+
+    suspend fun setLastSyncTimestamp(timestamp: Long) {
+        context.dataStore.edit { preferences ->
+            preferences[PreferencesKeys.LAST_SYNC_TIMESTAMP] = timestamp
         }
     }
 }

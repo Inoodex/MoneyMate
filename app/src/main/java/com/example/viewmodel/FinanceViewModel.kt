@@ -1,6 +1,9 @@
 package com.example.viewmodel
 
+import android.app.Activity
 import android.app.Application
+import android.content.Context
+import androidx.credentials.CredentialManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.local.AppDatabase
@@ -12,7 +15,16 @@ import com.example.data.local.entity.TransactionEntity
 import com.example.data.preferences.ThemeMode
 import com.example.data.preferences.UserPreferencesRepository
 import com.example.data.preferences.UserSettings
+import com.example.data.repository.CloudDataBundle
 import com.example.data.repository.FinanceRepository
+import com.example.data.repository.FirestoreSyncRepository
+import com.example.util.GoogleAuthManager
+import com.google.firebase.Firebase
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.FirebaseUser
+import com.google.firebase.auth.UserProfileChangeRequest
+import com.google.firebase.auth.auth
+import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -20,6 +32,13 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.util.Calendar
+
+sealed class SyncStatus {
+    object Idle : SyncStatus()
+    object Syncing : SyncStatus()
+    data class Success(val message: String, val timestamp: Long = System.currentTimeMillis()) : SyncStatus()
+    data class Error(val message: String) : SyncStatus()
+}
 
 enum class TransactionFilterType {
     ALL, INCOME, EXPENSE, TRANSFER
@@ -84,6 +103,13 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
     private val database = AppDatabase.getDatabase(application, viewModelScope)
     private val repository = FinanceRepository(database)
     private val prefsRepository = UserPreferencesRepository(application)
+    private val firestoreSyncRepository = FirestoreSyncRepository(application)
+    private val auth = Firebase.auth
+    private val credentialManager = CredentialManager.create(application)
+
+    val currentUser = MutableStateFlow<FirebaseUser?>(auth.currentUser)
+    val isGuestMode = MutableStateFlow(false)
+    val syncStatus = MutableStateFlow<SyncStatus>(SyncStatus.Idle)
 
     val userSettings: StateFlow<UserSettings> = prefsRepository.userSettingsFlow.stateIn(
         scope = viewModelScope,
@@ -135,7 +161,35 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
     // App Lock State
     val isAppLocked = MutableStateFlow(false)
 
+    private val authListener = FirebaseAuth.AuthStateListener { firebaseAuth ->
+        val user = firebaseAuth.currentUser
+        currentUser.value = user
+        if (user != null) {
+            viewModelScope.launch {
+                val displayName = user.displayName ?: user.email?.substringBefore("@") ?: "User"
+                val email = user.email ?: ""
+                prefsRepository.updateProfile(displayName, email)
+                if (userSettings.value.isAutoSyncEnabled) {
+                    triggerAutoSync()
+                }
+            }
+        }
+    }
+
     init {
+        auth.addAuthStateListener(authListener)
+
+        // Attempt silent sign-in if existing session credentials exist
+        GoogleAuthManager.attemptAutoSignIn(
+            context = application,
+            credentialManager = credentialManager,
+            onAuthSuccess = {
+                currentUser.value = auth.currentUser
+            },
+            onUnauthenticated = {},
+            scope = viewModelScope
+        )
+
         viewModelScope.launch {
             userSettings.collect { settings ->
                 if (settings.isPinLockEnabled && settings.pinCode.isNotBlank()) {
@@ -143,6 +197,11 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
                 }
             }
         }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        auth.removeAuthStateListener(authListener)
     }
 
     fun unlockApp() {
@@ -606,6 +665,15 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
     fun updateProfile(name: String, email: String) {
         viewModelScope.launch {
             prefsRepository.updateProfile(name, email)
+            val user = auth.currentUser
+            if (user != null && name.isNotBlank()) {
+                try {
+                    val profileUpdates = UserProfileChangeRequest.Builder()
+                        .setDisplayName(name.trim())
+                        .build()
+                    user.updateProfile(profileUpdates).await()
+                } catch (ignored: Exception) {}
+            }
         }
     }
 
@@ -631,5 +699,240 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
 
     suspend fun restoreFromJson(jsonString: String, clearExisting: Boolean = true): com.example.data.repository.RestoreResult {
         return repository.restoreFromJson(jsonString, clearExisting)
+    }
+
+    fun continueAsGuest() {
+        isGuestMode.value = true
+    }
+
+    fun signInWithEmail(
+        email: String,
+        password: String,
+        onSuccess: () -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            try {
+                val result = auth.signInWithEmailAndPassword(email.trim(), password).await()
+                val user = result.user
+                currentUser.value = user
+                isGuestMode.value = false
+                if (user != null) {
+                    val name = user.displayName?.ifBlank { null } ?: user.email?.substringBefore("@") ?: "User"
+                    val userEmail = user.email ?: email.trim()
+                    prefsRepository.updateProfile(name, userEmail)
+                    if (userSettings.value.isAutoSyncEnabled) {
+                        triggerAutoSync()
+                    }
+                }
+                onSuccess()
+            } catch (e: Exception) {
+                val msg = when {
+                    e.message?.contains("no user record", ignoreCase = true) == true -> "No account found with this email. Please create an account."
+                    e.message?.contains("invalid-credential", ignoreCase = true) == true ||
+                    e.message?.contains("wrong-password", ignoreCase = true) == true -> "Incorrect email or password."
+                    e.message?.contains("badly formatted", ignoreCase = true) == true -> "Invalid email address format."
+                    else -> e.localizedMessage ?: "Sign-in failed. Please check your credentials."
+                }
+                onError(msg)
+            }
+        }
+    }
+
+    fun signUpWithEmail(
+        name: String,
+        email: String,
+        password: String,
+        onSuccess: () -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            try {
+                val result = auth.createUserWithEmailAndPassword(email.trim(), password).await()
+                val user = result.user
+                if (user != null) {
+                    try {
+                        val profileUpdates = UserProfileChangeRequest.Builder()
+                            .setDisplayName(name.trim())
+                            .build()
+                        user.updateProfile(profileUpdates).await()
+                    } catch (ignored: Exception) {}
+
+                    currentUser.value = user
+                    isGuestMode.value = false
+                    val finalName = name.trim().ifBlank { user.email?.substringBefore("@") ?: "User" }
+                    prefsRepository.updateProfile(finalName, user.email ?: email.trim())
+                    if (userSettings.value.isAutoSyncEnabled) {
+                        triggerAutoSync()
+                    }
+                }
+                onSuccess()
+            } catch (e: Exception) {
+                val msg = when {
+                    e.message?.contains("already in use", ignoreCase = true) == true -> "An account with this email already exists. Please log in."
+                    e.message?.contains("weak-password", ignoreCase = true) == true -> "Password should be at least 6 characters."
+                    e.message?.contains("badly formatted", ignoreCase = true) == true -> "Invalid email address format."
+                    else -> e.localizedMessage ?: "Sign-up failed. Please try again."
+                }
+                onError(msg)
+            }
+        }
+    }
+
+    fun sendPasswordReset(
+        email: String,
+        onSuccess: () -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            try {
+                auth.sendPasswordResetEmail(email.trim()).await()
+                onSuccess()
+            } catch (e: Exception) {
+                onError(e.localizedMessage ?: "Failed to send password reset email.")
+            }
+        }
+    }
+
+    // Google Sign-In & Cloud Sync
+    fun signInWithGoogle(
+        activity: Activity,
+        onSuccess: () -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        GoogleAuthManager.signInWithGoogle(
+            activity = activity,
+            credentialManager = credentialManager,
+            onAuthSuccess = {
+                val user = auth.currentUser
+                currentUser.value = user
+                isGuestMode.value = false
+                if (user != null) {
+                    viewModelScope.launch {
+                        val displayName = user.displayName ?: user.email?.substringBefore("@") ?: "User"
+                        val email = user.email ?: ""
+                        prefsRepository.updateProfile(displayName, email)
+                        triggerAutoSync()
+                    }
+                }
+                onSuccess()
+            },
+            onAuthError = { err ->
+                syncStatus.value = SyncStatus.Error(err)
+                onError(err)
+            },
+            scope = viewModelScope
+        )
+    }
+
+    fun signOut(context: Context, onComplete: () -> Unit = {}) {
+        isGuestMode.value = false
+        GoogleAuthManager.signOut(
+            context = context,
+            credentialManager = credentialManager,
+            onSignOutComplete = {
+                currentUser.value = null
+                syncStatus.value = SyncStatus.Idle
+                onComplete()
+            },
+            scope = viewModelScope
+        )
+    }
+
+    fun setAutoSyncEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            prefsRepository.setAutoSync(enabled)
+            if (enabled && currentUser.value != null) {
+                triggerAutoSync()
+            }
+        }
+    }
+
+    fun triggerAutoSync() {
+        val user = currentUser.value ?: return
+        if (!userSettings.value.isAutoSyncEnabled) return
+        viewModelScope.launch {
+            syncStatus.value = SyncStatus.Syncing
+            val success = firestoreSyncRepository.uploadAll(
+                userId = user.uid,
+                email = user.email ?: "",
+                displayName = user.displayName ?: user.email?.substringBefore("@") ?: "User",
+                transactions = allTransactions.value,
+                accounts = allAccounts.value,
+                categories = allCategories.value,
+                budgets = allBudgets.value,
+                savingsGoals = allSavingsGoals.value
+            )
+            if (success) {
+                val now = System.currentTimeMillis()
+                prefsRepository.setLastSyncTimestamp(now)
+                syncStatus.value = SyncStatus.Success("Synced to cloud", now)
+            } else {
+                syncStatus.value = SyncStatus.Error("Failed to sync data to cloud")
+            }
+        }
+    }
+
+    fun syncToCloudNow(onComplete: (Boolean, String) -> Unit = { _, _ -> }) {
+        val user = currentUser.value
+        if (user == null) {
+            onComplete(false, "Please sign in with Google to sync to cloud.")
+            return
+        }
+        viewModelScope.launch {
+            syncStatus.value = SyncStatus.Syncing
+            val success = firestoreSyncRepository.uploadAll(
+                userId = user.uid,
+                email = user.email ?: "",
+                displayName = user.displayName ?: user.email?.substringBefore("@") ?: "User",
+                transactions = allTransactions.value,
+                accounts = allAccounts.value,
+                categories = allCategories.value,
+                budgets = allBudgets.value,
+                savingsGoals = allSavingsGoals.value
+            )
+            if (success) {
+                val now = System.currentTimeMillis()
+                prefsRepository.setLastSyncTimestamp(now)
+                syncStatus.value = SyncStatus.Success("Cloud backup completed successfully", now)
+                onComplete(true, "Cloud backup completed successfully")
+            } else {
+                syncStatus.value = SyncStatus.Error("Failed to backup to cloud")
+                onComplete(false, "Failed to backup to cloud")
+            }
+        }
+    }
+
+    fun restoreFromCloudNow(onComplete: (Boolean, String) -> Unit = { _, _ -> }) {
+        val user = currentUser.value
+        if (user == null) {
+            onComplete(false, "Please sign in with Google to restore from cloud.")
+            return
+        }
+        viewModelScope.launch {
+            syncStatus.value = SyncStatus.Syncing
+            val bundle = firestoreSyncRepository.downloadAll(user.uid)
+            if (bundle == null) {
+                syncStatus.value = SyncStatus.Error("Failed to download cloud backup")
+                onComplete(false, "Failed to download cloud backup")
+                return@launch
+            }
+            val res = repository.restoreFromCloud(bundle, clearExisting = true)
+            if (res.success) {
+                val now = System.currentTimeMillis()
+                prefsRepository.setLastSyncTimestamp(now)
+                syncStatus.value = SyncStatus.Success("Restored ${res.transactionsCount} transactions", now)
+                onComplete(true, "Successfully restored ${res.transactionsCount} transactions & ${res.accountsCount} accounts")
+            } else {
+                syncStatus.value = SyncStatus.Error(res.errorMessage ?: "Failed to restore")
+                onComplete(false, res.errorMessage ?: "Failed to restore")
+            }
+        }
+    }
+
+    private fun autoSyncIfEnabled() {
+        if (userSettings.value.isAutoSyncEnabled && currentUser.value != null) {
+            triggerAutoSync()
+        }
     }
 }

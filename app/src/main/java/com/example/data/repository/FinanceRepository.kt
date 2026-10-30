@@ -366,6 +366,118 @@ class FinanceRepository(private val database: AppDatabase) {
             )
         }
     }
+
+    suspend fun restoreFromCloud(bundle: CloudDataBundle, clearExisting: Boolean = true): RestoreResult {
+        return try {
+            if (clearExisting) {
+                transactionDao.deleteAllTransactions()
+                budgetDao.deleteAllBudgets()
+                savingsGoalDao.deleteAllSavingsGoals()
+                categoryDao.deleteAllCategories()
+                accountDao.deleteAllAccounts()
+            }
+
+            val accountIdMap = mutableMapOf<String, Long>()
+            bundle.accounts.forEach { acc ->
+                val id = accountDao.insertAccount(
+                    AccountEntity(
+                        name = acc.name,
+                        type = acc.type,
+                        initialBalance = acc.initialBalance,
+                        accountNumber = acc.accountNumber,
+                        colorHex = acc.colorHex,
+                        iconName = acc.iconName
+                    )
+                )
+                accountIdMap[acc.name.lowercase()] = id
+            }
+
+            val categoryIdMap = mutableMapOf<String, Long>()
+            bundle.categories.forEach { cat ->
+                val id = categoryDao.insertCategory(
+                    CategoryEntity(
+                        name = cat.name,
+                        type = cat.type,
+                        iconName = cat.iconName,
+                        colorHex = cat.colorHex,
+                        isDefault = cat.isDefault
+                    )
+                )
+                categoryIdMap[cat.name.lowercase()] = id
+            }
+
+            if (accountDao.getAccountCount() == 0) {
+                AppDatabase.populateInitialData(database)
+            }
+
+            bundle.transactions.forEach { tx ->
+                val catId = categoryIdMap[tx.categoryName.lowercase()] ?: tx.categoryId
+                val accId = accountIdMap[tx.accountName.lowercase()] ?: tx.accountId
+                val toAccId = tx.toAccountName?.let { accountIdMap[it.lowercase()] } ?: tx.toAccountId
+
+                val entity = TransactionEntity(
+                    type = tx.type,
+                    amount = tx.amount,
+                    categoryId = catId,
+                    categoryName = tx.categoryName,
+                    accountId = accId,
+                    accountName = tx.accountName,
+                    toAccountId = toAccId,
+                    toAccountName = tx.toAccountName,
+                    dateMillis = tx.dateMillis,
+                    description = tx.description,
+                    isRecurring = tx.isRecurring,
+                    recurringFrequency = tx.recurringFrequency
+                )
+                transactionDao.insertTransaction(entity)
+            }
+
+            bundle.budgets.forEach { b ->
+                val catId = categoryIdMap[b.categoryName.lowercase()] ?: b.categoryId
+                budgetDao.insertBudget(
+                    BudgetEntity(
+                        categoryId = catId,
+                        categoryName = b.categoryName,
+                        monthlyLimit = b.monthlyLimit,
+                        monthYear = b.monthYear
+                    )
+                )
+            }
+
+            bundle.savingsGoals.forEach { g ->
+                savingsGoalDao.insertSavingsGoal(
+                    SavingsGoalEntity(
+                        title = g.title,
+                        targetAmount = g.targetAmount,
+                        currentSaved = g.currentSaved,
+                        targetDateMillis = g.targetDateMillis,
+                        colorHex = g.colorHex,
+                        iconName = g.iconName,
+                        notes = g.notes
+                    )
+                )
+            }
+
+            RestoreResult(
+                success = true,
+                transactionsCount = bundle.transactions.size,
+                accountsCount = bundle.accounts.size,
+                categoriesCount = bundle.categories.size,
+                budgetsCount = bundle.budgets.size,
+                goalsCount = bundle.savingsGoals.size
+            )
+        } catch (e: Exception) {
+            RestoreResult(
+                success = false,
+                transactionsCount = 0,
+                accountsCount = 0,
+                categoriesCount = 0,
+                budgetsCount = 0,
+                goalsCount = 0,
+                errorMessage = e.localizedMessage ?: "Failed to restore data from cloud"
+            )
+        }
+    }
 }
 
 data class RestoreResult(

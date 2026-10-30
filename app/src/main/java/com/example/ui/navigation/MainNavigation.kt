@@ -33,6 +33,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.example.data.local.entity.TransactionEntity
 import com.example.data.preferences.ThemeMode
+import com.example.ui.screens.auth.AuthScreen
 import com.example.ui.screens.auth.PinLockScreen
 import com.example.ui.screens.budgets.BudgetsScreen
 import com.example.ui.screens.home.HomeScreen
@@ -47,6 +48,8 @@ import com.example.viewmodel.FinanceViewModel
 fun MainApp(viewModel: FinanceViewModel) {
     val userSettings by viewModel.userSettings.collectAsStateWithLifecycle()
     val isAppLocked by viewModel.isAppLocked.collectAsStateWithLifecycle()
+    val currentUser by viewModel.currentUser.collectAsStateWithLifecycle()
+    val isGuestMode by viewModel.isGuestMode.collectAsStateWithLifecycle()
 
     val isDark = when (userSettings.themeMode) {
         ThemeMode.SYSTEM -> isSystemInDarkTheme()
@@ -55,7 +58,12 @@ fun MainApp(viewModel: FinanceViewModel) {
     }
 
     MoneyMateTheme(darkTheme = isDark) {
-        if (isAppLocked && userSettings.isPinLockEnabled && userSettings.pinCode.isNotBlank()) {
+        if (currentUser == null && !isGuestMode) {
+            AuthScreen(
+                viewModel = viewModel,
+                onAuthSuccess = { /* User logged in or chose guest mode */ }
+            )
+        } else if (isAppLocked && userSettings.isPinLockEnabled && userSettings.pinCode.isNotBlank()) {
             PinLockScreen(
                 userSettings = userSettings,
                 onSuccess = { viewModel.unlockApp() }

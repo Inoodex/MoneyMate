@@ -92,7 +92,7 @@ fun HomeScreen(
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = userSettings.userName.take(1).uppercase(),
+                            text = userSettings.userName.trim().take(1).ifBlank { "U" }.uppercase(),
                             style = MaterialTheme.typography.titleMedium.copy(
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.primary
